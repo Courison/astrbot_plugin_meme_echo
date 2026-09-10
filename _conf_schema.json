@@ -10,5 +10,11 @@
     "type": "bool",
     "hint": "是否启用表情包复读功能",
     "default": true
+  },
+  "group_whitelist": {
+    "description": "群聊白名单",
+    "type": "list",
+    "hint": "只有列表中的群号才会触发复读，留空表示对所有群聊生效（私聊默认不触发）",
+    "default": []
   }
 }
