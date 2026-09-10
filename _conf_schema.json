@@ -29,6 +29,12 @@
     "hint": "图片复读概率（0.0 - 1.0），默认 0.3 即 30%",
     "default": 0.3
   },
+  "keyword_blacklist": {
+    "description": "复读关键词黑名单",
+    "type": "list",
+    "hint": "消息文本中包含任一项时不复读（不区分大小写），例如：接龙、投票、https://",
+    "default": []
+  },
   "group_whitelist": {
     "description": "群聊白名单",
     "type": "list",

@@ -6,6 +6,7 @@ astrbot_plugin_meme_echo - 表情包 / 消息复读机
 - 文本复读：用户发文本时按概率主动发相同文本
 - @Bot 消息一律不复读
 - 支持群聊白名单
+- 支持关键词黑名单（消息文本命中即跳过）
 - 主动发送（不带 @ / 引用）
 """
 
@@ -31,12 +32,14 @@ class MemeEchoPlugin(Star):
         img_on = self.config.get("image_reread_enable", True)
         img_p = self.config.get("image_reread_probability", 0.3)
         whitelist = self.config.get("group_whitelist", []) or []
+        blacklist = self.config.get("keyword_blacklist", []) or []
         scope = "全部群聊" if not whitelist else f"{len(whitelist)} 个白名单群"
         logger.info(
             f"[MemeEcho] 插件已加载（主动发送模式） | "
             f"文本复读: {'开' if text_on else '关'} {text_p:.0%} | "
             f"图片复读: {'开' if img_on else '关'} {img_p:.0%} | "
-            f"生效范围: {scope}"
+            f"生效范围: {scope} | "
+            f"关键词黑名单: {len(blacklist)} 条"
         )
 
     async def terminate(self):
@@ -56,12 +59,18 @@ class MemeEchoPlugin(Star):
         if not self._is_group_allowed(event):
             return
 
-        # 4. 只要 @ 了 Bot，一律不复读（文本/图片都不复读）
+        # 4. @ 了 Bot 一律不复读
         if self._is_bot_mentioned(event):
             logger.debug("[MemeEcho] 检测到 @Bot，跳过复读")
             return
 
-        # 5. 图片复读分支
+        # 5. 关键词黑名单（先于图片/文本分支判断）
+        text = self._extract_text(event) or ""
+        if self._hit_keyword_blacklist(text):
+            logger.debug(f"[MemeEcho] 命中关键词黑名单，跳过复读: {text[:50]}")
+            return
+
+        # 6. 图片复读分支
         image_component = self._extract_image(event)
         if image_component is not None:
             if not self.config.get("image_reread_enable", True):
@@ -80,10 +89,9 @@ class MemeEchoPlugin(Star):
                 logger.error(f"[MemeEcho] 主动发送图片失败: {e}")
             return
 
-        # 6. 文本复读分支（仅当消息中无图片时）
+        # 7. 文本复读分支
         if not self.config.get("text_reread_enable", False):
             return
-        text = self._extract_text(event)
         if not text:
             return
         if random.random() >= self._safe_prob("text_reread_probability", 0.1):
@@ -94,6 +102,32 @@ class MemeEchoPlugin(Star):
             logger.debug(f"[MemeEcho] 已主动发送文本: {text[:80]}")
         except Exception as e:
             logger.error(f"[MemeEcho] 主动发送文本失败: {e}")
+
+    # ------------------------------------------------------------------
+    # 关键词黑名单
+    # ------------------------------------------------------------------
+
+    def _hit_keyword_blacklist(self, text: str) -> bool:
+        """
+        判断文本是否命中关键词黑名单。
+
+        - 空文本直接返回 False（图消息无文字说明时也能正常复读）
+        - 匹配方式：子串包含（不区分大小写）
+        - 空白关键词会被自动忽略
+        """
+        if not text:
+            return False
+
+        blacklist = self.config.get("keyword_blacklist", []) or []
+        if not blacklist:
+            return False
+
+        haystack = text.lower()
+        for kw in blacklist:
+            k = str(kw).strip().lower()
+            if k and k in haystack:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # 消息提取
