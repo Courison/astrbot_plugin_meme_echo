@@ -2,14 +2,14 @@
 astrbot_plugin_meme_echo - 表情包复读机
 
 当用户发送表情包（图片）时，按配置的概率复读相同的表情包。
-支持群聊白名单。
+支持群聊白名单；若消息中 @ 了机器人，视为识图请求，不复读。
 """
 
 import random
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.message_components import Image
+from astrbot.api.message_components import Image, At
 from astrbot.api.star import Context, Star
 from astrbot.core import AstrBotConfig
 
@@ -22,7 +22,6 @@ class MemeEchoPlugin(Star):
         self.config = config
 
     async def initialize(self):
-        """插件加载时调用"""
         prob = self.config.get("reread_probability", 0.3)
         enable = self.config.get("enable", True)
         whitelist = self.config.get("group_whitelist", []) or []
@@ -32,14 +31,10 @@ class MemeEchoPlugin(Star):
         )
 
     async def terminate(self):
-        """插件卸载时调用"""
         logger.info("[MemeEcho] 插件已卸载")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_all_message(self, event: AstrMessageEvent):
-        """
-        监听所有消息事件，检测表情包并概率复读。
-        """
         # 1. 插件开关
         if not self.config.get("enable", True):
             return
@@ -48,27 +43,32 @@ class MemeEchoPlugin(Star):
         if event.get_sender_id() == event.get_self_id():
             return
 
-        # 3. 群聊白名单判断（新增）
+        # 3. 群聊白名单判断
         if not self._is_group_allowed(event):
             return
 
-        # 4. 从消息链中提取图片组件
+        # 4. 提取图片组件
         image_component = self._extract_image(event)
         if image_component is None:
             return
 
-        # 5. 概率判断
+        # 5. 若消息中 @ 了机器人 → 视为识图请求，不复读
+        if self._is_bot_mentioned(event):
+            logger.debug("[MemeEcho] 检测到 @Bot，跳过复读（按识图处理）")
+            return
+
+        # 6. 概率判断
         probability = self._get_safe_probability()
         if random.random() >= probability:
             return
 
-        # 6. 获取图片源
+        # 7. 获取图片源
         image_source = self._resolve_image_source(image_component)
         if image_source is None:
             logger.warning("[MemeEcho] 无法解析图片源，跳过复读")
             return
 
-        # 7. 发送复读消息
+        # 8. 发送复读消息（裸图片，不 @ 任何人、不引用）
         try:
             yield event.image_result(image_source)
             logger.debug(f"[MemeEcho] 已复读表情包: {image_source[:80]}")
@@ -81,31 +81,19 @@ class MemeEchoPlugin(Star):
 
     @staticmethod
     def _get_group_id(event: AstrMessageEvent) -> str | None:
-        """
-        兼容多平台获取当前群号，私聊或无群号时返回 None。
-        """
-        # 优先用官方 API
         try:
             gid = event.get_group_id()
             if gid:
                 return str(gid)
         except Exception:
             pass
-        # 退化到消息对象上的字段
         gid = getattr(event.message_obj, "group_id", None)
         return str(gid) if gid else None
 
     def _is_group_allowed(self, event: AstrMessageEvent) -> bool:
-        """
-        判断当前会话是否在白名单内。
-
-        规则：
-        - 白名单为空 → 所有群聊放行（私聊仍然不触发，因为没有群号）
-        - 白名单非空 → 仅列表中的群号放行
-        """
         whitelist = self.config.get("group_whitelist", []) or []
         if not whitelist:
-            # 空白名单 = 不限制群聊；但必须能取到群号，私聊不触发
+            # 空白名单：所有群放行，私聊不触发
             return self._get_group_id(event) is not None
 
         group_id = self._get_group_id(event)
@@ -116,7 +104,39 @@ class MemeEchoPlugin(Star):
         return group_id in allowed
 
     # ------------------------------------------------------------------
-    # 原有工具方法（保持不变）
+    # @ 机器人检测
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_bot_mentioned(event: AstrMessageEvent) -> bool:
+        """
+        检测消息链中是否 @ 了机器人自己。
+
+        兼容不同平台 At 组件的字段名（qq / user_id / target）。
+        """
+        try:
+            self_id = str(event.get_self_id())
+            chain = event.message_obj.message
+        except AttributeError:
+            return False
+
+        if not self_id:
+            return False
+
+        for comp in chain:
+            if not isinstance(comp, At):
+                continue
+            target = (
+                getattr(comp, "qq", None)
+                or getattr(comp, "user_id", None)
+                or getattr(comp, "target", None)
+            )
+            if target is not None and str(target) == self_id:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # 原有工具方法
     # ------------------------------------------------------------------
 
     @staticmethod
