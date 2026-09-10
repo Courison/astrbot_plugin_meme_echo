@@ -1,0 +1,14 @@
+{
+  "reread_probability": {
+    "description": "复读概率",
+    "type": "float",
+    "hint": "用户发送表情包时，机器人复读的概率（0.0 - 1.0），默认 0.3 即 30%",
+    "default": 0.3
+  },
+  "enable": {
+    "description": "启用插件",
+    "type": "bool",
+    "hint": "是否启用表情包复读功能",
+    "default": true
+  }
+}

@@ -1,0 +1,13 @@
+name: astrbot_plugin_meme_echo
+display_name: 表情包复读机
+short_desc: 当用户发送表情包时，按概率复读相同表情包
+desc: |
+  监听聊天中的图片/表情包消息，按设定概率复读用户发送的表情包。
+  支持通过配置调整复读概率，支持 QQ、微信、飞书等平台。
+version: 1.0.0
+author: 你的名字
+repo: https://github.com/courison/astrbot_plugin_meme_echo
+astrbot_version: ">=4.17.0"
+support_platforms:
+  - aiocqhttp
+  - qq_official
