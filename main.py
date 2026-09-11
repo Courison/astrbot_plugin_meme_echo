@@ -2,12 +2,19 @@
 astrbot_plugin_meme_echo - 表情包 / 消息复读机
 
 功能：
-- 图片复读：用户发表情包/图片时按概率主动发相同图片
+- 表情包复读：用户发表情包（sticker）时按概率主动发相同图片
+- 图片复读：用户发普通图片时按概率主动发相同图片
 - 文本复读：用户发文本时按概率主动发相同文本
 - @Bot 消息一律不复读
 - 支持群聊白名单
 - 支持关键词黑名单（消息文本命中即跳过）
 - 主动发送（不带 @ / 引用）
+
+表情包 vs 普通图片识别：
+- 优先读取 OneBot 协议 Image 组件的 sub_type 字段
+  - sub_type == 1 → 表情包（客户端缩放显示，无查看原图/下载）
+  - sub_type == 0 或字段缺失 → 普通图片
+- 多级兜底：组件属性 → 组件原始 dict → raw_message 中的 message 数组
 """
 
 import random
@@ -30,16 +37,18 @@ class MemeEchoPlugin(Star):
         text_on = self.config.get("text_reread_enable", False)
         text_p = self.config.get("text_reread_probability", 0.1)
         img_on = self.config.get("image_reread_enable", True)
-        img_p = self.config.get("image_reread_probability", 0.3)
+        img_p = self.config.get("image_reread_probability", 0.1)
+        sticker_on = self.config.get("sticker_reread_enable", True)
+        sticker_p = self.config.get("sticker_reread_probability", 0.3)
         whitelist = self.config.get("group_whitelist", []) or []
         blacklist = self.config.get("keyword_blacklist", []) or []
         scope = "全部群聊" if not whitelist else f"{len(whitelist)} 个白名单群"
         logger.info(
             f"[MemeEcho] 插件已加载（主动发送模式） | "
-            f"文本复读: {'开' if text_on else '关'} {text_p:.0%} | "
-            f"图片复读: {'开' if img_on else '关'} {img_p:.0%} | "
-            f"生效范围: {scope} | "
-            f"关键词黑名单: {len(blacklist)} 条"
+            f"文本: {'开' if text_on else '关'} {text_p:.0%} | "
+            f"图片: {'开' if img_on else '关'} {img_p:.0%} | "
+            f"表情包: {'开' if sticker_on else '关'} {sticker_p:.0%} | "
+            f"生效范围: {scope} | 关键词黑名单: {len(blacklist)} 条"
         )
 
     async def terminate(self):
@@ -59,37 +68,52 @@ class MemeEchoPlugin(Star):
         if not self._is_group_allowed(event):
             return
 
-        # 4. @ 了 Bot 一律不复读
+        # 4. @ 了 Bot 一律不复读（识图/对话交给其他插件）
         if self._is_bot_mentioned(event):
             logger.debug("[MemeEcho] 检测到 @Bot，跳过复读")
             return
 
-        # 5. 关键词黑名单（先于图片/文本分支判断）
+        # 5. 关键词黑名单（先于图片/文本分支）
         text = self._extract_text(event) or ""
         if self._hit_keyword_blacklist(text):
             logger.debug(f"[MemeEcho] 命中关键词黑名单，跳过复读: {text[:50]}")
             return
 
-        # 6. 图片复读分支
-        image_component = self._extract_image(event)
+        # 6. 图片分支（区分表情包 / 普通图片）
+        image_component, is_sticker = self._extract_image_and_check(event)
         if image_component is not None:
-            if not self.config.get("image_reread_enable", True):
+            if is_sticker:
+                enable_key = "sticker_reread_enable"
+                prob_key = "sticker_reread_probability"
+                default_prob = 0.3
+                label = "表情包"
+            else:
+                enable_key = "image_reread_enable"
+                prob_key = "image_reread_probability"
+                default_prob = 0.1
+                label = "普通图片"
+
+            if not self.config.get(enable_key, True):
+                logger.debug(f"[MemeEcho] {label}复读开关关闭，跳过")
                 return
-            if random.random() >= self._safe_prob("image_reread_probability", 0.3):
+
+            if random.random() >= self._safe_prob(prob_key, default_prob):
                 return
+
             image_source = self._resolve_image_source(image_component)
             if image_source is None:
                 logger.warning("[MemeEcho] 无法解析图片源，跳过")
                 return
+
             try:
                 chain = self._build_image_chain(image_source)
                 await self.context.send_message(event.unified_msg_origin, chain)
-                logger.debug(f"[MemeEcho] 已主动发送图片: {image_source[:80]}")
+                logger.debug(f"[MemeEcho] 已主动发送{label}: {image_source[:80]}")
             except Exception as e:
-                logger.error(f"[MemeEcho] 主动发送图片失败: {e}")
+                logger.error(f"[MemeEcho] 主动发送{label}失败: {e}")
             return
 
-        # 7. 文本复读分支
+        # 7. 文本分支
         if not self.config.get("text_reread_enable", False):
             return
         if not text:
@@ -104,17 +128,81 @@ class MemeEchoPlugin(Star):
             logger.error(f"[MemeEcho] 主动发送文本失败: {e}")
 
     # ------------------------------------------------------------------
+    # 图片提取 + 表情包识别
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_image_and_check(event: AstrMessageEvent):
+        """
+        提取第一个 Image 组件，并判断是否为表情包。
+
+        返回: (Image 组件 或 None, 是否表情包: bool)
+
+        识别依据（OneBot 协议）：
+        - sub_type == 1 → 表情包（客户端缩放显示，无查看原图/下载）
+        - sub_type == 0 或字段缺失 → 普通图片
+        """
+        try:
+            message_chain = event.message_obj.message
+        except AttributeError:
+            return None, False
+
+        for component in message_chain:
+            if not isinstance(component, Image):
+                continue
+
+            # 优先从组件本身读 sub_type
+            sub_type = getattr(component, "sub_type", None)
+
+            # 兜底：从原始消息里读
+            if sub_type is None:
+                sub_type = MemeEchoPlugin._read_sub_type_from_raw(event, component)
+
+            try:
+                is_sticker = (sub_type is not None and int(sub_type) == 1)
+            except (TypeError, ValueError):
+                is_sticker = False
+
+            return component, is_sticker
+
+        return None, False
+
+    @staticmethod
+    def _read_sub_type_from_raw(event: AstrMessageEvent, component: Image):
+        """
+        兜底：尝试从原始消息对象里读取 sub_type。
+
+        不同 AstrBot / OneBot 实现里，图片的原始数据可能挂在：
+        - component.raw / component.data / component._data
+        - event.message_obj.raw_message['message'] 数组内的 image 段
+        """
+        # 组件自带的原始 dict
+        for attr in ("raw", "data", "_data"):
+            raw = getattr(component, attr, None)
+            if isinstance(raw, dict):
+                sub = raw.get("sub_type") or raw.get("subType")
+                if sub is not None:
+                    return sub
+
+        # 事件原始消息里的 message 数组
+        raw_message = getattr(event.message_obj, "raw_message", None)
+        if isinstance(raw_message, dict):
+            for seg in raw_message.get("message", []) or []:
+                if not isinstance(seg, dict):
+                    continue
+                if seg.get("type") == "image":
+                    data = seg.get("data", {}) or {}
+                    sub = data.get("sub_type") or data.get("subType")
+                    if sub is not None:
+                        return sub
+
+        return None
+
+    # ------------------------------------------------------------------
     # 关键词黑名单
     # ------------------------------------------------------------------
 
     def _hit_keyword_blacklist(self, text: str) -> bool:
-        """
-        判断文本是否命中关键词黑名单。
-
-        - 空文本直接返回 False（图消息无文字说明时也能正常复读）
-        - 匹配方式：子串包含（不区分大小写）
-        - 空白关键词会被自动忽略
-        """
         if not text:
             return False
 
@@ -132,17 +220,6 @@ class MemeEchoPlugin(Star):
     # ------------------------------------------------------------------
     # 消息提取
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _extract_image(event: AstrMessageEvent) -> Image | None:
-        try:
-            message_chain = event.message_obj.message
-        except AttributeError:
-            return None
-        for component in message_chain:
-            if isinstance(component, Image):
-                return component
-        return None
 
     @staticmethod
     def _extract_text(event: AstrMessageEvent) -> str | None:

@@ -6,27 +6,39 @@
     "default": true
   },
   "text_reread_enable": {
-    "description": "开启消息复读",
+    "description": "开启文本复读",
     "type": "bool",
     "hint": "是否复读纯文本消息",
     "default": false
   },
   "text_reread_probability": {
-    "description": "消息复读概率",
+    "description": "文本复读概率",
     "type": "float",
-    "hint": "文本消息复读概率（0.0 - 1.0），默认 0.1 即 10%",
+    "hint": "文本复读概率（0.0 - 1.0），默认 0.1 即 10%",
     "default": 0.1
   },
   "image_reread_enable": {
-    "description": "开启图片复读",
+    "description": "开启普通图片复读",
     "type": "bool",
-    "hint": "是否复读表情包 / 图片消息",
+    "hint": "是否复读普通图片（有查看原图/下载入口的图片）",
     "default": true
   },
   "image_reread_probability": {
-    "description": "图片复读概率",
+    "description": "普通图片复读概率",
     "type": "float",
-    "hint": "图片复读概率（0.0 - 1.0），默认 0.3 即 30%",
+    "hint": "普通图片复读概率（0.0 - 1.0），默认 0.1 即 10%",
+    "default": 0.1
+  },
+  "sticker_reread_enable": {
+    "description": "开启表情包复读",
+    "type": "bool",
+    "hint": "是否复读表情包（点击后无查看原图/下载入口的图片）",
+    "default": true
+  },
+  "sticker_reread_probability": {
+    "description": "表情包复读概率",
+    "type": "float",
+    "hint": "表情包复读概率（0.0 - 1.0），默认 0.3 即 30%",
     "default": 0.3
   },
   "keyword_blacklist": {
